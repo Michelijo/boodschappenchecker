@@ -14,9 +14,10 @@ app.use(cors({
   }));
   
 
-async function scrapeAH(product) {
+  async function scrapeAH(product) {
     console.log(`Scraping Albert Heijn voor: ${product}`);
     const browser = await puppeteer.launch({ headless: true });
+    // const browser = await puppeteer.launch({ headless: false, slowMo: 100 });
     const page = await browser.newPage();
     page.setViewport({ width: 1280, height: 800 });
     await page.setUserAgent(
@@ -24,42 +25,65 @@ async function scrapeAH(product) {
     );
 
     try {
-        const url = `https://www.ah.nl/zoeken?query=${product}`;
+        const url = `https://www.ah.nl/zoeken?query=${product}&sortBy=price`;
         await page.goto(url, { waitUntil: 'domcontentloaded' });
         
+        // Accepteer cookies als ze er zijn
         const cookieButtonSelector = '[data-testhook="accept-cookies"]';
         if (await page.$(cookieButtonSelector)) {
             await page.click(cookieButtonSelector);
             await new Promise(resolve => setTimeout(resolve, 2000));
         }
-        
+
+        console.log("✅ Pagina geladen, cookies geaccepteerd indien nodig");
+
+        // Wacht op producten
         const productSelector = '[class*="product-card"]';
         await page.waitForSelector(productSelector, { timeout: 10000 });
-                
-        const priceElement = await page.$('[aria-label^="Prijs: €"]');
-        let price = null;
-        if (priceElement) {
-            price = await page.evaluate(el => el.getAttribute('aria-label').replace('Prijs: €', '').replace(',', '.'), priceElement);
-            price = parseFloat(price);
-        }
+
+        // Zoek alle producten op de pagina
+        const products = await page.$$(productSelector);
+        console.log(`🔍 Aantal gevonden producten: ${products.length}`);
         
-        const imageSelector = '[data-testhook="product-image"]';
-        const imageUrl = await page.evaluate(() => {
-            const imgElement = document.querySelector('[data-testhook="product-image"]');
-            return imgElement ? imgElement.src : null;
-        });
+        for (let i = 0; i < Math.min(products.length, 5); i++) { // Max 5 om niet te spammen
+            let titleElement = await products[i].$('[data-testhook="product-title"]');
+            var title = titleElement ? await page.evaluate(el => el.innerText, titleElement) : "Geen titel gevonden";
+        }      
 
+        let cheapestProduct = null;
+        let cheapestPrice = Infinity;
+        let cheapestImageUrl = null;
 
+        for (const product of products) {
+            const priceElement = await product.$('[aria-label^="Prijs: €"]');
+            if (priceElement) {
+                let priceText = await page.evaluate(el => el.getAttribute('aria-label').replace('Prijs: €', '').replace(',', '.'), priceElement);
+                let price = parseFloat(priceText);
+                if (price < cheapestPrice) {
+                    cheapestPrice = price;
+                    cheapestProduct = product;
+
+                    // Afbeelding ophalen
+                    const imageElement = await cheapestProduct.$('[data-testhook="product-image"]');
+                    cheapestImageUrl = imageElement ? await page.evaluate(el => el.src, imageElement) : null;
+                }
+            }
+        }
+
+        if (!cheapestProduct) {
+            console.warn("❌ Geen producten gevonden.");
+            await browser.close();
+            return { product, price: "Niet beschikbaar", unitSize: "Niet beschikbaar", pricePerUnit: "Niet beschikbaar", imageUrl: null };
+        }
+
+        // Unit size ophalen
         const unitSizeSelector = '[data-testhook="product-unit-size"]';
-        await page.waitForSelector(unitSizeSelector, { timeout: 5000 });
-
-        const unitSizeText = await page.evaluate(() => {
-            let unitSizeElement = document.querySelector('[data-testhook="product-unit-size"]');
-            return unitSizeElement ? unitSizeElement.innerText.trim() : null;            
-        });
-
+        let unitSizeText = null;
         let unitSizeInGrams = null;
-        if (unitSizeText) {
+
+        const unitSizeElement = await cheapestProduct.$(unitSizeSelector);
+        if (unitSizeElement) {  
+            unitSizeText = await page.evaluate(el => el.innerText.trim(), unitSizeElement);
             const match = unitSizeText.match(/([\d,.]+)\s*(g|kg|ml|l)/i);
             if (match) {
                 let value = parseFloat(match[1].replace(',', '.'));
@@ -71,25 +95,25 @@ async function scrapeAH(product) {
             }
         }
 
-        let pricePerKilo = null;
-        if (unitSizeInGrams && price) {
-            pricePerKilo = (price / (unitSizeInGrams / 1000)).toFixed(2); // Omrekenen naar €/kg
+        // Prijs per kilo berekenen
+        let pricePerUnit = null;
+        if (unitSizeInGrams) {
+            pricePerUnit = (cheapestPrice / (unitSizeInGrams / 1000)).toFixed(2);
         }
 
         await browser.close();
 
-        console.log("🔹 Price:", price);
+        console.log("🔹 Prijs:", cheapestPrice);
         console.log("🔹 Unit Size:", unitSizeText);
-        console.log("🔹 Unit Size in Grams:", unitSizeInGrams);
-        console.log("🔹 Price per Kilo:", pricePerKilo);
-        console.log(`✅ Albert Heijn scraper voltooid voor: ${product}`);
+        console.log("🔹 Price per Kilo:", pricePerUnit);
+        console.log("🔹 Image URL:", cheapestImageUrl);
+        console.log("✅ AH Scraping voltooid voor:", product);
 
-
-        return { product, price: price || "Niet beschikbaar", unitSize: unitSizeText, pricePerKilo, imageUrl  };
+        return { product, title, price: cheapestPrice, unitSize: unitSizeText, pricePerUnit, imageUrl: cheapestImageUrl };
     } catch (error) {
         console.error("Fout tijdens scraping:", error);
         await browser.close();
-        return { product, price: price || "Niet beschikbaar", unitSize: unitSizeText, pricePerKilo, imageUrl  };
+        return { product, title, price: "Niet beschikbaar", unitSize: "Niet beschikbaar", pricePerUnit: "Niet beschikbaar", imageUrl: null };
     }
 }
 
@@ -103,14 +127,8 @@ async function scrapeJumbo(product) {
     );
 
     try {
-        const url = `https://www.jumbo.com/producten/?searchType=keyword&searchTerms=${product}`;
+        const url = `https://www.jumbo.com/producten/?searchType=keyword&searchTerms=${product}&sort=price+asc`;
         await page.goto(url, { waitUntil: 'domcontentloaded' });
-
-        // Sorteer op prijs (laag - hoog)
-        const sortSelector = '[data-testid="select-options"]';
-        await page.waitForSelector(sortSelector);
-        await page.select(sortSelector, `/producten/?searchType=keyword&searchTerms=${product}&sort=price+asc`);
-        await page.waitForNavigation({ waitUntil: 'domcontentloaded' });
 
         // Prijs ophalen
         const priceSelector = '.current-price .screenreader-only';
@@ -122,7 +140,7 @@ async function scrapeJumbo(product) {
         const price = priceText ? parseFloat(priceText.replace(',', '.')) : null;
 
         // Prijs per eenheid ophalen
-        const unitPriceSelector = '.price-per-unit .screenreader-only';
+        const unitPriceSelector = '[class*="price-per-unit"]';
         await page.waitForSelector(unitPriceSelector);
         const unitPriceText = await page.evaluate(() => {
             const unitPriceElement = document.querySelector('.price-per-unit .screenreader-only');
@@ -149,8 +167,9 @@ async function scrapeJumbo(product) {
 
         await browser.close();
         
-        console.log("🔹 Price:", price);
-        console.log("🔹 Price per Kilo:", pricePerUnit);
+        console.log("🔹 Prijs:", price);
+        console.log("🔹 Image URL:", imageUrl);
+        console.log("🔹 Prijs per unit:", pricePerUnit);
         console.log(`✅ Jumbo scraper voltooid voor: ${product}`);
 
         return { product, price, pricePerUnit, unitSize, imageUrl  };

@@ -72,12 +72,12 @@ export default function Home() {
                 alt={`${supermarkt} logo`} 
                 className="h-12 w-auto mb-2"
               />
-              <h2 className="text-xl font-semibold">{supermarkt}</h2>
+              <h2 className="text-xl font-semibold">{details.title}</h2>
               {details.imageUrl && (
                 <img src={details.imageUrl} alt={details.product} className="w-48 h-48 object-cover rounded-xl mt-2" />
               )}
               <p className="text-lg">Prijs: <span className="font-bold">€{details.price}</span></p>
-              <p className="text-sm text-gray-600">Prijs per kilo: {details.pricePerKilo ? `€${details.pricePerKilo}` : "Niet beschikbaar"}</p>
+              <p className="text-sm text-gray-600">Prijs per kilo: {details.pricePerUnit ? `€${details.pricePerUnit}` : "Niet beschikbaar"}</p>
             </CardContent>
           </Card>
         </div>
